@@ -103,6 +103,28 @@ def upload_documents():
 
 
 # ----------------------------------
+#  fetch Files
+# ----------------------------------
+@app.route('/get-documents', methods=['GET'])
+def get_documents():
+    try:
+        uid = request.args.get('uid')
+        if not uid:
+            return jsonify({'success': False, 'error': 'Missing uid'}), 400
+
+        ref = db.reference(f'application/pending/{uid}')
+        data = ref.get()
+
+        if not data:
+            return jsonify({'success': False, 'error': 'No documents found'}), 404
+
+        return jsonify({'success': True, 'data': data})
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ----------------------------------
 #  Serve Files
 # ----------------------------------
 @app.route('/uploads/applications/<path:filename>')
