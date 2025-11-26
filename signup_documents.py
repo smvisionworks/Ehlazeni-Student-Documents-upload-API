@@ -9,30 +9,39 @@ from flask_cors import CORS
 import json
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})
+CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
 # ----------------------------------
-#  Upload Config
+#  Upload Config (Local on Render)
 # ----------------------------------
-UPLOAD_FOLDER = "uploads/applications"   # Must be local folder for Render
+UPLOAD_FOLDER = os.path.join(os.getcwd(), "uploads", "applications")
 ALLOWED_EXTENSIONS = {'pdf', 'jpg', 'jpeg', 'png'}
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024   # 20MB
 
 # ----------------------------------
-#  Firebase Initialization
+#  Firebase Initialization (robust)
 # ----------------------------------
+firebase_inited = False
+try:
+    # support either env name (matching your two services)
+    service_key = os.environ.get("SERVICE_ACCOUNT_KEY") or os.environ.get("FIREBASE_SERVICE_ACCOUNT")
 
-
-service_account_info = json.loads(os.environ["FIREBASE_SERVICE_ACCOUNT"])
-cred = credentials.Certificate(service_account_info)
-
-firebase_admin.initialize_app(cred, {
-    "databaseURL": "https://ehlazeni-star-school-default-rtdb.firebaseio.com/"
-})
-
+    if not service_key:
+        print("ERROR: SERVICE_ACCOUNT_KEY or FIREBASE_SERVICE_ACCOUNT env var missing.")
+    else:
+        # service_key must be a JSON string
+        svc = json.loads(service_key)
+        cred = credentials.Certificate(svc)
+        firebase_admin.initialize_app(cred, {
+            "databaseURL": "https://ehlazeni-star-school-default-rtdb.firebaseio.com/"
+        })
+        firebase_inited = True
+        print("Firebase initialized successfully.")
+except Exception as e:
+    # Do NOT re-raise — keep the server running, but mark firebase_inited False
+    print("Firebase initialization failed:", str(e))
+    firebase_inited = False
 
 # ----------------------------------
 #  Helpers
@@ -42,13 +51,16 @@ def allowed_file(filename):
 
 
 def save_file_and_get_url(file_obj, host_url):
+    # ensure upload dir exists now (create at runtime)
+    os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
     filename = secure_filename(file_obj.filename)
     unique = f"{int(datetime.now().timestamp()*1000)}_{uuid.uuid4().hex}_{filename}"
 
     dest = os.path.join(app.config['UPLOAD_FOLDER'], unique)
     file_obj.save(dest)
 
-    # Public URL using route
+    # Public URL using route (Render sometimes strips trailing slash)
     return f"{host_url.rstrip('/')}/uploads/applications/{unique}", unique, os.path.getsize(dest)
 
 
@@ -57,6 +69,9 @@ def save_file_and_get_url(file_obj, host_url):
 # ----------------------------------
 @app.route('/upload-documents', methods=['POST'])
 def upload_documents():
+    if not firebase_inited:
+        return jsonify({'success': False, 'error': 'Server firebase not initialized. Check env var.'}), 500
+
     try:
         uid = request.form.get('uid')
         if not uid:
@@ -107,6 +122,9 @@ def upload_documents():
 # ----------------------------------
 @app.route('/get-documents', methods=['GET'])
 def get_documents():
+    if not firebase_inited:
+        return jsonify({'success': False, 'error': 'Server firebase not initialized. Check env var.'}), 500
+
     try:
         uid = request.args.get('uid')
         if not uid:
@@ -129,6 +147,7 @@ def get_documents():
 # ----------------------------------
 @app.route('/uploads/applications/<path:filename>')
 def serve_uploaded_file(filename):
+    # send_from_directory will 404 if not present
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
 
